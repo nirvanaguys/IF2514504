@@ -843,3 +843,60 @@ BEGIN
 END$$
 
 DELIMITER ;
+
+DELIMITER $$
+
+DROP PROCEDURE IF EXISTS sp_lihat_daftar_pegawai$$
+CREATE PROCEDURE sp_lihat_daftar_pegawai()
+BEGIN
+    SELECT
+        ID_Pegawai,
+        Nama_Pegawai,
+        ID_Atasan,
+        Role,
+        Sisa_Cuti_Tahunan,
+        Status_Aktif
+    FROM Pegawai
+    ORDER BY ID_Pegawai;
+END$$
+
+DELIMITER ;
+
+
+DELIMITER $$
+
+DROP PROCEDURE IF EXISTS sp_lihat_riwayat_kuota_cuti$$
+CREATE PROCEDURE sp_lihat_riwayat_kuota_cuti(
+    IN p_id_pegawai INT
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM Pegawai
+        WHERE ID_Pegawai = p_id_pegawai
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Pegawai tidak ditemukan.';
+    END IF;
+
+    SELECT
+        ID_Riwayat,
+        ID_Pegawai,
+        Tgl_Perubahan,
+        Perubahan_Saldo,
+        Keterangan
+    FROM Riwayat_Kuota_Cuti
+    WHERE ID_Pegawai = p_id_pegawai
+    ORDER BY Tgl_Perubahan DESC, ID_Riwayat DESC;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
