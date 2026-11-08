@@ -90,13 +90,13 @@ BEGIN
 
     END IF;
 
-    -- Cek apakah sudah ada pengajuan pending
+    -- Cek apakah sudah ada pengajuan pending atau disetujui
     -- dengan tanggal yang bentrok
     IF EXISTS (
         SELECT 1
         FROM Pengajuan_Cuti
         WHERE ID_Pegawai = p_id_pegawai
-          AND Status_Pengajuan = 'pending'
+          AND Status_Pengajuan IN ('pending', 'disetujui')
           AND (
                 p_tgl_mulai BETWEEN Tgl_Mulai AND Tgl_Selesai
                 OR
@@ -107,7 +107,7 @@ BEGIN
     ) THEN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT =
-            'Sudah ada pengajuan cuti pending di rentang tanggal tersebut.';
+            'Sudah ada pengajuan cuti yang pending atau disetujui di rentang tanggal tersebut.';
     END IF;
 
     -- Simpan pengajuan
@@ -145,7 +145,9 @@ CREATE PROCEDURE sp_tambah_pegawai_baru(
     IN p_nama_pegawai VARCHAR(150),
     IN p_id_atasan INT,
     IN p_role ENUM('pegawai','hrd','manajer'),
-    IN p_sisa_cuti INT
+    IN p_sisa_cuti INT,
+    IN p_username VARCHAR(50),
+    IN p_password_hash VARCHAR(255)
 )
 BEGIN
 
@@ -163,6 +165,17 @@ BEGIN
         SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT =
             'Sisa cuti tidak boleh negatif.';
+    END IF;
+
+    -- Cek username duplikat
+    IF EXISTS (
+        SELECT 1
+        FROM Pegawai
+        WHERE Username = p_username
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT =
+            'Username sudah digunakan.';
     END IF;
 
     -- Cek atasan jika diberikan
@@ -183,6 +196,8 @@ BEGIN
     -- Tambahkan pegawai baru
     INSERT INTO Pegawai (
         Nama_Pegawai,
+        Username,
+        Password_Hash,
         ID_Atasan,
         Role,
         Sisa_Cuti_Tahunan,
@@ -190,6 +205,8 @@ BEGIN
     )
     VALUES (
         p_nama_pegawai,
+        p_username,
+        p_password_hash,
         p_id_atasan,
         p_role,
         p_sisa_cuti,
@@ -248,23 +265,24 @@ BEGIN
             'Manajer atau HRD tidak ditemukan atau tidak aktif.';
     END IF;
 
-    -- Menampilkan pengajuan bawahan
+    -- Menampilkan pengajuan bawahan dengan memanfaatkan View v_daftar_pengajuan_cuti
+    -- Menggunakan subquery IN/EXISTS untuk menghindari explicit JOIN ganda
     SELECT
-        pc.ID_Pengajuan,
-        p.ID_Pegawai,
-        p.Nama_Pegawai,
-        jc.Nama_Jenis,
-        pc.Tgl_Mulai,
-        pc.Tgl_Selesai,
-        pc.Durasi_Hari,
-        pc.Status_Pengajuan
-    FROM Pengajuan_Cuti pc
-    JOIN Pegawai p
-        ON pc.ID_Pegawai = p.ID_Pegawai
-    JOIN Jenis_Cuti jc
-        ON pc.ID_Jenis = jc.ID_Jenis
+        v.ID_Pengajuan,
+        v.ID_Pegawai,
+        v.Nama_Pegawai,
+        v.Nama_Jenis,
+        v.Tgl_Mulai,
+        v.Tgl_Selesai,
+        v.Durasi_Hari,
+        v.Status_Pengajuan
+    FROM v_daftar_pengajuan_cuti v
     WHERE (
-        p.ID_Atasan = p_id_atasan
+        v.ID_Pegawai IN (
+            SELECT p.ID_Pegawai
+            FROM Pegawai p
+            WHERE p.ID_Atasan = p_id_atasan
+        )
         OR EXISTS (
             SELECT 1
             FROM Pegawai h
@@ -272,7 +290,7 @@ BEGIN
               AND h.Role = 'hrd'
         )
     )
-    ORDER BY pc.ID_Pengajuan DESC;
+    ORDER BY v.ID_Pengajuan DESC;
 
     COMMIT;
 
@@ -391,6 +409,7 @@ BEGIN
     DECLARE v_status VARCHAR(20);
     DECLARE v_pengaju INT;
     DECLARE v_durasi INT;
+    DECLARE v_id_jenis INT;
     DECLARE v_potong BOOLEAN;
     DECLARE v_role VARCHAR(20);
     DECLARE v_sisa INT;
@@ -408,10 +427,12 @@ BEGIN
     SELECT
         Status_Pengajuan,
         ID_Pegawai,
+        ID_Jenis,
         Durasi_Hari
     INTO
         v_status,
         v_pengaju,
+        v_id_jenis,
         v_durasi
     FROM Pengajuan_Cuti
     WHERE ID_Pengajuan = p_id_pengajuan;
@@ -465,14 +486,11 @@ BEGIN
 
     END IF;
 
-    -- Cek apakah jenis cuti memotong kuota
-    SELECT
-        jc.Apakah_Potong_Cuti_Tahunan
+    -- Cek apakah jenis cuti memotong kuota tanpa JOIN langsung
+    SELECT Apakah_Potong_Cuti_Tahunan
     INTO v_potong
-    FROM Pengajuan_Cuti pc
-    JOIN Jenis_Cuti jc
-        ON pc.ID_Jenis = jc.ID_Jenis
-    WHERE pc.ID_Pengajuan = p_id_pengajuan;
+    FROM Jenis_Cuti
+    WHERE ID_Jenis = v_id_jenis;
 
     IF v_potong = TRUE THEN
 
@@ -852,6 +870,7 @@ BEGIN
     SELECT
         ID_Pegawai,
         Nama_Pegawai,
+        Username,
         ID_Atasan,
         Role,
         Sisa_Cuti_Tahunan,
@@ -895,6 +914,52 @@ BEGIN
     FROM Riwayat_Kuota_Cuti
     WHERE ID_Pegawai = p_id_pegawai
     ORDER BY Tgl_Perubahan DESC, ID_Riwayat DESC;
+
+    COMMIT;
+END$$
+
+DELIMITER ;
+
+-- ============================================================
+-- PROCEDURE: Lihat Riwayat Pengajuan Pegawai Sendiri
+-- ============================================================
+DELIMITER $$
+
+DROP PROCEDURE IF EXISTS sp_lihat_pengajuan_pegawai$$
+CREATE PROCEDURE sp_lihat_pengajuan_pegawai(
+    IN p_id_pegawai INT
+)
+BEGIN
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    START TRANSACTION;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM Pegawai
+        WHERE ID_Pegawai = p_id_pegawai
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Pegawai tidak ditemukan.';
+    END IF;
+
+    -- Mengambil pengajuan cuti pegawai berdasarkan view v_daftar_pengajuan_cuti
+    SELECT
+        ID_Pengajuan,
+        ID_Pegawai,
+        Nama_Pegawai,
+        Nama_Jenis,
+        Tgl_Mulai,
+        Tgl_Selesai,
+        Durasi_Hari,
+        Status_Pengajuan
+    FROM v_daftar_pengajuan_cuti
+    WHERE ID_Pegawai = p_id_pegawai
+    ORDER BY ID_Pengajuan DESC;
 
     COMMIT;
 END$$

@@ -13,6 +13,8 @@ CREATE TABLE Jenis_Cuti (
 CREATE TABLE Pegawai (
     ID_Pegawai        INT AUTO_INCREMENT PRIMARY KEY,
     Nama_Pegawai      VARCHAR(150) NOT NULL,
+    Username          VARCHAR(50) NOT NULL UNIQUE,
+    Password_Hash     VARCHAR(255) NOT NULL,
     ID_Atasan         INT NULL,
     Role              ENUM('pegawai', 'hrd', 'manajer') NOT NULL DEFAULT 'pegawai',
     Sisa_Cuti_Tahunan INT NOT NULL DEFAULT 0,

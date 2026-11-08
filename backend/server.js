@@ -130,10 +130,10 @@ function authorizeRoles(...allowedRoles) {
 
 
 const db = mysql.createPool({
-    host: 'localhost',
-    user: 'root',
-    password: '123456',
-    database: 'sistem_cuti'
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : '',
+    database: process.env.DB_NAME || 'sistem_cuti'
 });
 
 app.get('/', (req, res) => {
